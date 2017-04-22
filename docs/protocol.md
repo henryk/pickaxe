@@ -61,4 +61,76 @@ Note: This message does not have SID, C, or M
 |V    |       2 | two uint  |  used protocol version as two integers                   |
 |nonce|      16 | opaque    |  server's login nonce                                    |
 
+### T=2 Connect
 
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID                                          |
+|Proto|       1 | uint      | Protocol identifier: 4=IPv4, 6=IPv6                      |
+|Target|   4/16 | IP address| Protocol specific address                                |
+|Port |       2 | uint, le  | TCP port number to connect to                            |
+
+### T=3 Connect response
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID, copied from request                     |
+|CID  |       4 | opaque    | Connection ID                                            |
+|Status|      1 | uint      |                                                          |
+
+### T=4 Listen
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID                                          |
+|Config|      1 | uint      | Indicates whether a specific or random port should be used|
+|Port |       2 | uint, le  | TCP port to listen on                                    |
+
+### T=5 Listen response
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID, copied from request                     |
+|Status|      1 | uint      |                                                          |
+|Port |       2 | uint, le  | TCP that's listened on                                   |
+
+### T=6 Stop listen
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID, copied from request                     |
+|Status|      1 | uint      |                                                          |
+
+### T=7 Accept
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|PID  |      16 | opaque    | Pending port ID, copied from request                     |
+|CID  |       4 | opaque    | Connection ID                                            |
+|Status|      1 | uint      |                                                          |
+
+### T=8/9 Close conn
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|CID  |       4 | opaque    | Connection ID                                            |
+|Status|      1 | uint      |                                                          |
+
+### T=10/11 Data
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|CID  |       4 | opaque    | Connection ID                                            |
+|Data |       x | opaque    | Payload                                                  |
+
+### T=12/13 Keep alive/Echo
+
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|Type |       1 | uint      |                                                          |
+|EID  |     16? | opaque    | Echo ID, only for echo                                   |
+|Data |      x? | opaque    | Echo data, only for echo                                 |
+
+### T=126 Disconnect
+
+No further fields
