@@ -45,3 +45,23 @@ Finally, both sides may send data packets for any open CID.
     M           8   opaque     packet HMAC
 
 Not all items are transmitted in all packets: For packet based lower layers, the L is implicit and not transmitted. SID,C,M are not valid for login/login response packets and not transmitted. Certain lower layers may transmit some of these fields out-of-band, e.g. as HTTP parameters.
+
+## Message types
+
+### T=0 Login
+
+Note: This message does not have SID, C, or M
+
+    LID        16  opaque      Login ID, used to match the server response
+    V           2  two uint    requested protocol version as two integers major.minor
+    UID         x  UTF-8       user name
+
+### T=1 Login response
+
+Note: This message does not have SID, C, or M
+
+    LID        16  opaque      Login ID, copied from the login message
+    V           2  uint x 2    used protocol version as two integers
+    nonce      16  opaque      server's login nonce
+
+
