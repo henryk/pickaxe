@@ -5,20 +5,12 @@
 
 The common protocol assumes a method to transfer packets from client to server and vice versa. Both parties may send a packet at any time. The server will accept packets from the client on any of the methods and try to respond with the same method. The client is free to chose any method or multiple methods. Duplicate packets will only be processed once, but reponses will be resent on packet re-reception (within reason).
 
+    ------------------------- Control and data --------------------------
+    -------------------- Session and authentication ---------------------
+    ------------------- Packetizer ----------------   --- FIXME: ACK? ---
+    TCP|SOCKS|HTTP CONNECT|HTTP Websocket|HTTP BOSH | HTTP plain|ICMP|DNS
 
-
-    +-------------------------------------------------------------------------------+ 
-    |                                                                               |
-    |                                                                               |
-    |   ------------------------- Control and data --------------------------       |
-    |   -------------------- Session and authentication ---------------------       |
-    |   ------------------- Packetizer ----------------   --- FIXME: ACK? ---       |
-    |   TCP|SOCKS|HTTP CONNECT|HTTP Websocket|HTTP BOSH | HTTP plain|ICMP|DNS       |
-    |                                                                               |
-    | Fig 1: Protocol layers                                                        |
-    +-------------------------------------------------------------------------------+
-
-Figure 1 shows that there's two types of lower layers: Those that provide a stream, and those that provide a message/packet interface. Stream layers are processed through a packetizer that splits the stream on message boundaries (by prepedin each message with the message length).
+The shows that there's two types of lower layers: Those that provide a stream, and those that provide a message/packet interface. Stream layers are processed through a packetizer that splits the stream on message boundaries (by prepedin each message with the message length).
 
 FIXME: Stream layers generally provide receipt acknowledgements, message layers generally do not. This may need to be adressed by a seperate ACK layer.
 
@@ -37,12 +29,13 @@ Finally, both sides may send data packets for any open CID.
 
 ### Basic packet format
 
-    name   length   type       description
-    L           4   uint, le   packet length, only used with stream transports
-    T           1   uint       packet type, even: sent from server, bit 7 is reserved
-    SID         4   opaque     session ID
-    C           3   uint, le   packet sequence number
-    M           8   opaque     packet HMAC
+|name |  length |  type     |  description                                             |
+|-----|--------:|-----------|----------------------------------------------------------|
+|L    |       4 |  uint, le |  packet length, only used with stream transports         |
+|T    |       1 |  uint     |  packet type, bit 0: sent from server, bit 7 is reserved |
+|SID  |       4 |  opaque   |  session ID                                              |
+|C    |       3 |  uint, le |  packet sequence number                                  |
+|M    |       8 |  opaque   |  packet HMAC                                             |
 
 Not all items are transmitted in all packets: For packet based lower layers, the L is implicit and not transmitted. SID,C,M are not valid for login/login response packets and not transmitted. Certain lower layers may transmit some of these fields out-of-band, e.g. as HTTP parameters.
 
