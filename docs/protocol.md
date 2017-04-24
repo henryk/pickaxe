@@ -20,7 +20,9 @@ FIXME: Stream layers generally provide receipt acknowledgements, message layers 
 The Client has username U and password P. Server has list of all U/P pairs. First packet from the client is a login request with the username and login request ID (LID). The server responds with a login response containing a session ID (SID) and a nonce. Both client and server calculate a session key K using a suitable KDF (FIXME: PBKDF2?) using U,P,LID,SID and nonce as inputs.
 (The server will protect against DoS by allowing only one login attempt per username every few seconds.) Important: Server behaviour must be the same for existing vs. non-existing usernames!
 
-All packets except for the login and login response are associated with a SID and therefore K and will be protected with a 8-byte MAC M (FIXME: truncated HMAC-SHA256?). Packets that fail authentication will be silently discarded. All packets have a 3-byte sequence number C and will only be processed in sequence (FIXME: rolling window?). Replayed packets are discarded. Exception: If a packet that elicited a response is re-received, the response will be re-sent, over the same mechanism that the new copy of the packet was receive. (FIXME: Defined reasonable boundaries) This allows the client to send a packet using multiple means and receive the response over any working lower layer.
+All packets except for the login and login response are associated with a SID and therefore K and will be protected with a 8-byte MAC M (FIXME: truncated HMAC-SHA256?). Packets that fail authentication will be silently discarded. All packets have a sequence number and will only be processed in sequence (FIXME: rolling window?). Replayed packets are discarded. Exception: If a packet that elicited a response is re-received, the response will be re-sent, over the same mechanism that the new copy of the packet was receive. (FIXME: Defined reasonable boundaries) This allows the client to send a packet using multiple means and receive the response over any working lower layer.
+
+*Sequence number truncation*: Internally the sequence number C is a 64-bit unsigned integer. For transmission it is truncated to the least significant 16 bits, called C'. The recipient of a packet fills the upper 48 bits by looking at the expected sequence number (handling overflows as necessary). The HMAC calculation includes the full 64-bit sequence number!
 
 ### Control, Payload 
 
@@ -34,7 +36,7 @@ Finally, both sides may send data packets for any open CID.
 |L    |       4 |  uint, le |  packet length, only used with stream transports         |
 |T    |       1 |  uint     |  packet type, bit 0: sent from server, bit 7 is reserved |
 |SID  |       4 |  opaque   |  session ID                                              |
-|C    |       3 |  uint, le |  packet sequence number                                  |
+|C'   |       2 |  uint, le |  packet sequence number, truncated                       |
 |M    |       8 |  opaque   |  packet HMAC                                             |
 
 Not all items are transmitted in all packets: For packet based lower layers, the L is implicit and not transmitted. SID,C,M are not valid for login/login response packets and not transmitted. Certain lower layers may transmit some of these fields out-of-band, e.g. as HTTP parameters.
@@ -67,8 +69,8 @@ Note: This message does not have SID, C, or M
 |-----|--------:|-----------|----------------------------------------------------------|
 |PID  |      16 | opaque    | Pending port ID                                          |
 |Proto|       1 | uint      | Protocol identifier: 4=IPv4, 6=IPv6                      |
-|Target|   4/16 | IP address| Protocol specific address                                |
 |Port |       2 | uint, le  | TCP port number to connect to                            |
+|Target|      x | UTF-8     | Protocol specific address or name                        |
 
 ### T=3 Connect response
 
@@ -131,6 +133,6 @@ Note: This message does not have SID, C, or M
 |EID  |     16? | opaque    | Echo ID, only for echo                                   |
 |Data |      x? | opaque    | Echo data, only for echo                                 |
 
-### T=126 Disconnect
+### T=126/127 Disconnect
 
 No further fields
