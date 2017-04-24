@@ -25,6 +25,7 @@ class Message(object):
 	BODY = ()
 
 	def __init__(self, T=None):
+		self.meta = {}
 		self.T = T if T is not None else self.TYPE
 
 	@classmethod
@@ -100,6 +101,33 @@ class LoginResponseMessage(LoginMessageBase):
 	TYPE=1
 
 class SessionMessageBase(Message):
+	HEADER = Message.HEADER + (
+		('4s', 'SID'),
+		('<H', 'C_'),
+		('8s', 'M')
+	)
+
+	def __init__(self, T=None, SID=None, C=None, M=None):
+		super(SessionMessage, self).__init__(T)
+		self.SID = SID
+		self.C = C
+		self.M = M
+
+	@property
+	def C_(self):
+		C = getattr(self, 'C', None)
+		if C is None:
+			return C
+		else:
+			return C & 0xFFFF
+
+	@C_.setter
+	def C_(self, val):
+		if getattr(self, 'C', None) is not None:
+			raise AttributeError("Can't set C_ if C is already set")
+		if val is None:
+			raise TypeError("Can't set C_ to None")
+		self.C = val
 
 class ConnectMessage(SessionMessageBase):
 	TYPE=2

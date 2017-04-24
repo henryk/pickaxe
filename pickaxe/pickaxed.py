@@ -1,3 +1,5 @@
+from abc import ABCMeta, abstractmethod
+from pickaxe import Message
 import select, socket, re
 
 
@@ -84,7 +86,9 @@ class HTTPResponse(object):
 		) + (self.body if self.body else b"")
 
 
-class SimpleHTTPServerConnection(object):
+class TCPConnectionBase(object):
+	__metaclass__ = ABCMeta
+
 	def __init__(self, parent, conn, address):
 		self.parent = parent
 		self.conn = conn
@@ -92,7 +96,6 @@ class SimpleHTTPServerConnection(object):
 		self.inbuf = b''
 		self.outbuf = b''
 		conn.setblocking(0)
-		self.close_after_sending = False
 		self.open_for_read = True
 
 	def fileno(self):
@@ -122,20 +125,32 @@ class SimpleHTTPServerConnection(object):
 			## Invalid partial garbage received that can't be handled. Close
 			self.disconnect()
 
-		if (self.close_after_sending or not self.open_for_read) and not len(self.outbuf):
-			## No remaining data to be sent. Close
-			self.disconnect()
-
 	def disconnect(self):
 		self.parent.notify_disconnected(self)
 		self.conn.close()
+
+	@abstractmethod
+	def parse_and_handle(self):
+		pass
+
+
+class SimpleHTTPServerConnection(TCPConnectionBase):
+	def __init__(self, parent, conn, address):
+		super(SimpleHTTPServerConnection, self).__init__(parent, conn, address)
+		self.close_after_sending = False
+
+	def process_data(self, do_read, do_write, do_special):
+		super(SimpleHTTPServerConnection, self).process_data(do_read, do_write, do_special)
+
+		if (self.close_after_sending or not self.open_for_read) and not len(self.outbuf):
+			## No remaining data to be sent. Close
+			self.disconnect()
 
 	def parse_and_handle(self):
 		while len(self.inbuf):
 			request, self.inbuf = HTTPRequest.parse_one(self.inbuf)
 			if not request: return
 			self.handle_request(request)
-
 
 	def handle_request(self, request):
 		response = HTTPResponse(200, body="Your request has been ignored, thank you", headers={"Connection": "close"})
@@ -146,14 +161,28 @@ class SimpleHTTPServerConnection(object):
 		self.outbuf = self.outbuf + response.render()
 		self.close_after_sending = close_after_sending or self.close_after_sending
 
+class SimpleTCPServerConnection(TCPConnectionBase):
+	def parse_and_handle(self):
+		while len(self.inbuf):
+			if len(self.inbuf) >= 4:
+				(length, ) = struct.unpack("<I", self.inbuf[:4])
+				if inbuf >= 4 + length:
+					data, self.inbuf = self.inbuf[4:4+length], self.inbuf[4+length:]
+					message = Message.parse(data)
 
-class SimpleHTTPServerComponent(object):
-	def __init__(self, host='0.0.0.0', port=80):
+					self.parent.handle_message(self, message)
+	
+
+class TCPComponentBase(object):
+	CONNECTION_CLASS = None
+
+	def __init__(self, host='0.0.0.0', port=None):
 		self.host = host
 		self.port = port
 		self.connections = []
 		self.listen_socket = None
 		self.clients = []
+		self.incoming_messages = []
 
 	def start_listen(self):
 		if self.listen_socket:
@@ -183,26 +212,47 @@ class SimpleHTTPServerComponent(object):
 			self.accept_client()
 
 		for client in set(r).union(set(w)):
-			if isinstance(client, SimpleHTTPServerConnection):
+			if isinstance(client, self.CONNECTION_CLASS):
 				client.process_data(client in r, client in w, client in x)
 
 	def accept_client(self):
 		if not self.listen_socket: return
 
 		(conn, address) = self.listen_socket.accept()
-		self.clients.append( SimpleHTTPServerConnection(self, conn, address) )
+		self.clients.append( self.CONNECTION_CLASS(self, conn, address) )
+
+	def handle_message(self, client, message):
+		message.meta["component"] =  self
+		message.meta["client"] = client
+
+		self.incoming_messages.append(message)
+
 
 	def notify_disconnected(self, client):
 		if client in self.clients:
 			self.clients.remove(client)
 
+class SimpleHTTPServerComponent(TCPComponentBase):
+	CONNECTION_CLASS = SimpleHTTPServerConnection
+
+	def __init__(self, host='0.0.0.0', port=80, *args, **kwargs):
+		super(SimpleHTTPServerComponent, self).__init__(host, port, *args, **kwargs)
+
+class SimpleTCPServerComponent(TCPComponentBase):
+	CONNECTION_CLASS = SimpleTCPServerConnection
+
+	def __init__(self, host='0.0.0.0', port=8865, *args, **kwargs):
+		super(SimpleTCPServerComponent, self).__init__(host, port, *args, **kwargs)
+
 
 if __name__ == '__main__':
 	daemon = PickaxeD()
 	http = SimpleHTTPServerComponent(port=4567)
+	tcp = SimpleTCPServerComponent()
 
 	http.start_listen()
+	tcp.start_listen()
 
-	daemon.components.append(http)
+	daemon.components.extend([http, tcp])
 
 	daemon.mainloop()
