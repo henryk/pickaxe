@@ -1,4 +1,4 @@
-from pickaxe import Message, SelectLoop, SimpleTCPServerComponent, TCPComponentBase, TCPConnectionBase
+from pickaxe import Message, SelectLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
 import re
 
 class PickaxeD(SelectLoop):
@@ -71,7 +71,7 @@ class SimpleHTTPServerConnection(TCPConnectionBase):
 		self.outbuf = self.outbuf + response.render()
 		self.close_after_sending = close_after_sending or self.close_after_sending
 
-class SimpleHTTPServerComponent(TCPComponentBase):
+class SimpleHTTPServerComponent(TCPServerComponentBase):
 	CONNECTION_CLASS = SimpleHTTPServerConnection
 
 	def __init__(self, host='0.0.0.0', port=80, *args, **kwargs):

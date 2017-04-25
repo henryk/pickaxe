@@ -275,9 +275,48 @@ class TCPComponentBase(object):
 		self.host = host
 		self.port = port
 		self.connections = []
-		self.listen_socket = None
-		self.clients = []
 		self.incoming_messages = []
+
+	def get_select(self):
+		r,w,x, timeout = [c for c in self.connections if c.need_read()],[c for c in self.connections if c.need_write()],[], None
+
+		return r,w,x, timeout
+
+	def process_data(self, r, w, x):
+		for client in set(r).union(set(w)):
+			if isinstance(client, self.CONNECTION_CLASS):
+				client.process_data(client in r, client in w, client in x)
+
+	def handle_message(self, client, message):
+		message.meta["component"] =  self
+		message.meta["client"] = client
+
+		self.incoming_messages.append(message)
+
+
+	def notify_disconnected(self, client):
+		if client in self.connections:
+			self.connections.remove(client)
+
+class TCPServerComponentBase(TCPComponentBase):
+
+	def __init__(self, host='0.0.0.0', port=None):
+		super(TCPServerComponentBase, self).__init__(host, port)
+		self.listen_socket = None
+
+	def get_select(self):
+		r,w,x, timeout = super(TCPServerComponentBase, self).get_select()
+
+		if self.listen_socket:
+			r.append(self.listen_socket)
+
+		return r,w,x, timeout
+
+	def process_data(self, r, w, x):
+		if self.listen_socket and self.listen_socket in r:
+			self.accept_client()
+
+		super(TCPServerComponentBase, self).process_data(r, w, x)
 
 	def start_listen(self):
 		if self.listen_socket:
@@ -294,40 +333,16 @@ class TCPComponentBase(object):
 			self.listen_socket.close()
 			self.listen_socket = None
 
-	def get_select(self):
-		r,w,x, timeout = [c for c in self.clients if c.need_read()],[c for c in self.clients if c.need_write()],[], None
-
-		if self.listen_socket:
-			r.append(self.listen_socket)
-
-		return r,w,x, timeout
-
-	def process_data(self, r, w, x):
-		if self.listen_socket and self.listen_socket in r:
-			self.accept_client()
-
-		for client in set(r).union(set(w)):
-			if isinstance(client, self.CONNECTION_CLASS):
-				client.process_data(client in r, client in w, client in x)
-
 	def accept_client(self):
 		if not self.listen_socket: return
 
 		(conn, address) = self.listen_socket.accept()
-		self.clients.append( self.CONNECTION_CLASS(self, conn, address) )
+		self.connections.append( self.CONNECTION_CLASS(self, conn, address) )
 
-	def handle_message(self, client, message):
-		message.meta["component"] =  self
-		message.meta["client"] = client
+class TCPClientComponentBase(TCPComponentBase):
+	pass
 
-		self.incoming_messages.append(message)
-
-
-	def notify_disconnected(self, client):
-		if client in self.clients:
-			self.clients.remove(client)
-
-class SimpleTCPServerConnection(TCPConnectionBase):
+class SimpleTCPConnection(TCPConnectionBase):
 	def parse_and_handle(self):
 		while len(self.inbuf):
 			if len(self.inbuf) >= 4:
@@ -339,9 +354,15 @@ class SimpleTCPServerConnection(TCPConnectionBase):
 					self.parent.handle_message(self, message)
 
 
-class SimpleTCPServerComponent(TCPComponentBase):
-	CONNECTION_CLASS = SimpleTCPServerConnection
+class SimpleTCPServerComponent(TCPServerComponentBase):
+	CONNECTION_CLASS = SimpleTCPConnection
 
 	def __init__(self, host='0.0.0.0', port=8865, *args, **kwargs):
 		super(SimpleTCPServerComponent, self).__init__(host, port, *args, **kwargs)
 
+
+class SimpleTCPClientComponent(TCPClientComponentBase):
+	CONNECTION_CLASS = SimpleTCPConnection
+
+	def __init__(self, host, port=8865, *args, **kwargs):
+		super(SimpleTCPClientComponent, self).__init__(host, port, *args, **kwargs)
