@@ -1,5 +1,5 @@
 from abc import ABCMeta, abstractproperty, abstractmethod
-import inspect, struct, select, socket
+import inspect, struct, select, socket, time, thread, os, sys
 
 def all_subclasses(cls_a):
 	for cls_b in cls_a.__subclasses__():
@@ -187,6 +187,7 @@ class SelectLoop(object):
 
 	def loop_once(self, timeout=None):
 			read_candidate, write_candidate, special_candidate = dict(), dict(), dict()
+			had_timeout = []
 
 			for component in self.components:
 				r,w,x, timeout_ = component.get_select()
@@ -200,6 +201,9 @@ class SelectLoop(object):
 				for x_ in x:
 					special_candidate.setdefault(x_, set()).add(component)
 
+				if timeout_ is not None:
+					had_timeout.append(component)
+
 				if timeout is None:
 					timeout = timeout_
 				elif timeout_ is not None:
@@ -208,6 +212,9 @@ class SelectLoop(object):
 			to_read, to_write, to_special = select.select(read_candidate.keys(), write_candidate.keys(), special_candidate.keys(), timeout)
 
 			for component in self.components:
+				if component in had_timeout:
+					component.process_timeout()
+
 				r = [r_ for r_ in to_read if component in read_candidate[r_] ]
 				w = [w_ for w_ in to_write if component in write_candidate[w_] ]
 				x = [x_ for x_ in to_special if component in special_candidate[x_] ]
@@ -267,36 +274,72 @@ class TCPConnectionBase(object):
 	def parse_and_handle(self):
 		pass
 
+class ComponentBase(object):
+	__metaclass__ = ABCMeta
 
-class TCPComponentBase(object):
+	def __init__(self):
+		self.incoming_messages = []
+		self.timers = []
+
+	def get_select(self):
+		timeout = None
+		if self.timers:
+			## FIXME: Handle clock jumps
+			now = time.time()
+			timeout = max(0, self.timers[0][0] - now)
+		return [], [], [], timeout
+
+
+	@abstractmethod
+	def process_data(self, r, w, x): pass
+
+	def process_timeout(self):
+		## FIXME: Handle clock jumps
+		now = time.time()
+		triggered = [t for t in self.timers if now >= t[0]]
+		for t in triggered:
+			self.timers.remove(t)
+			t[-1]()
+
+	def add_timer(self, timeout, callback):
+		now = time.time()
+		t = [now + timeout, now, timeout, callback]
+		self.timers.append(t)
+		self.timers.sort()
+		return t
+
+	def del_timer(self, t):
+		self.timers.remove(t)
+
+
+class TCPComponentBase(ComponentBase):
 	CONNECTION_CLASS = None
 
 	def __init__(self, host='0.0.0.0', port=None):
+		super(TCPComponentBase, self).__init__()
 		self.host = host
 		self.port = port
 		self.connections = []
-		self.incoming_messages = []
 
 	def get_select(self):
-		r,w,x, timeout = [c for c in self.connections if c.need_read()],[c for c in self.connections if c.need_write()],[], None
-
-		return r,w,x, timeout
+		r,w,x, timeout = super(TCPComponentBase, self).get_select()
+		return r + [c for c in self.connections if c.need_read()], w + [c for c in self.connections if c.need_write()], x, timeout
 
 	def process_data(self, r, w, x):
-		for client in set(r).union(set(w)):
-			if isinstance(client, self.CONNECTION_CLASS):
-				client.process_data(client in r, client in w, client in x)
+		for connection in set(r).union(set(w)):
+			if isinstance(connection, self.CONNECTION_CLASS):
+				connection.process_data(connection in r, connection in w, connection in x)
 
-	def handle_message(self, client, message):
+	def handle_message(self, connection, message):
 		message.meta["component"] =  self
-		message.meta["client"] = client
+		message.meta["connection"] = connection
 
 		self.incoming_messages.append(message)
 
 
-	def notify_disconnected(self, client):
-		if client in self.connections:
-			self.connections.remove(client)
+	def notify_disconnected(self, connection):
+		if connection in self.connections:
+			self.connections.remove(connection)
 
 class TCPServerComponentBase(TCPComponentBase):
 
@@ -340,7 +383,78 @@ class TCPServerComponentBase(TCPComponentBase):
 		self.connections.append( self.CONNECTION_CLASS(self, conn, address) )
 
 class TCPClientComponentBase(TCPComponentBase):
-	pass
+	def __init__(self, host, port):
+		super(TCPClientComponentBase, self).__init__(host, port)
+		self.connecting_pipe = None
+		self.pending_socket = None
+		self.outgoing_socket = None
+		self.backoff = None
+		self.connecting_socket_job = None
+
+
+	def get_select(self):
+		if not self.outgoing_socket and not self.connecting_pipe:
+			self.schedule_connection()
+
+		r,w,x,t = super(TCPClientComponentBase, self).get_select()
+
+		if self.connecting_pipe:
+			r = r + [self.connecting_pipe[0]]
+
+		return r,w,x,t
+
+	def process_data(self, r, w, x):
+		if self.connecting_pipe and self.connecting_pipe[0] in r:
+			## The do_connect() thread successfully created a connection
+			os.read(self.connecting_pipe[0], 1)
+			os.close(self.connecting_pipe[0])
+			os.close(self.connecting_pipe[1])
+			self.connecting_pipe = None
+			self.outgoing_socket = self.pending_socket
+			self.pending_socket = None
+
+			if self.outgoing_socket:
+				address = self.outgoing_socket.getpeername()
+				self.connections.append( self.CONNECTION_CLASS(self, self.outgoing_socket, address) )
+
+		super(TCPClientComponentBase, self).process_data(r, w, x)
+
+	def schedule_connection(self):
+		if self.connecting_socket_job:
+			return
+
+		if self.backoff is None:
+			self.backoff = 0
+		elif self.backoff == 0:
+			self.backoff = 1
+		elif self.backoff < 32:
+			self.backoff = self.backoff*2
+
+		self.connecting_socket_job = self.add_timer(self.backoff, self.try_connect)
+
+	def try_connect(self):
+		self.connecting_socket_job = None
+
+		# We're going to use socket.create_connection() which transparently handles IPv4 and IPv6
+		# Unfortunately it's not non-blocking compatible, so we'll spawn a thread to execute that in
+		# The thread will signal back to the main thread with a Pipe
+		self.connecting_pipe = os.pipe()
+
+		thread.start_new_thread(self.do_connect, ())
+
+	def do_connect(self): ## Executed in new thread
+		try:
+			sock = socket.create_connection( (self.host, self.port) )
+			if sock:
+				self.backoff = None
+				sock.setblocking(0)
+				self.pending_socket = sock
+		except Exception as e:
+			print >>sys.stderr, e, "while connecting to", (self.host, self.port)
+		finally:
+			os.write(self.connecting_pipe[1], 'A') ## This will wake the main loop and proceed in self.process_data
+
+
 
 class SimpleTCPConnection(TCPConnectionBase):
 	def parse_and_handle(self):
