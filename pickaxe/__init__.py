@@ -454,9 +454,21 @@ class TCPClientComponentBase(TCPComponentBase):
 		finally:
 			os.write(self.connecting_pipe[1], 'A') ## This will wake the main loop and proceed in self.process_data
 
+	def notify_disconnected(self, connection):
+		super(TCPClientComponentBase, self).notify_disconnected(connection)
+		self.outgoing_socket = None
 
 
 class SimpleTCPConnection(TCPConnectionBase):
+	def process_data(self, do_read, do_write, do_special):
+		super(SimpleTCPConnection, self).process_data(do_read, do_write, do_special)
+
+		if not self.open_for_read and not len(self.outbuf):
+			## No remaining data to be sent and not open for reading -> Close
+			## The plain TCP protocol will never partially close a connection. If it's
+			## closed for reading that means that the server closed the connection
+			self.disconnect()
+
 	def parse_and_handle(self):
 		while len(self.inbuf):
 			if len(self.inbuf) >= 4:
