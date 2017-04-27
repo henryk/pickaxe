@@ -100,34 +100,46 @@ class LoginMessage(LoginMessageBase):
 class LoginResponseMessage(LoginMessageBase):
 	TYPE=1
 
+def _truncated_get(obj, name):
+	val = getattr(self, name, None)
+	if val is None:
+		return val
+	else:
+		return val & 0xFFFF
+
+def _truncated_set(obj, name, val):
+	if getattr(self, name, None) is not None:
+		raise AttributeError("Can't set %s_ if %s is already set" % (name, name))
+	if val is None:
+		raise TypeError("Can't set %s_ to None" % name)
+	setattr(obj, name, val)
+
 class SessionMessageBase(Message):
 	HEADER = Message.HEADER + (
 		('4s', 'SID'),
 		('<H', 'C_'),
+		('<H', 'A_'),
 		('8s', 'M')
 	)
 
-	def __init__(self, T=None, SID=None, C=None, M=None):
+	def __init__(self, T=None, SID=None, C=None, A=None, M=None):
 		super(SessionMessage, self).__init__(T)
 		self.SID = SID
 		self.C = C
+		self.A = A
 		self.M = M
 
 	@property
-	def C_(self):
-		C = getattr(self, 'C', None)
-		if C is None:
-			return C
-		else:
-			return C & 0xFFFF
+	def C_(self):      return _truncated_get('C')
 
 	@C_.setter
-	def C_(self, val):
-		if getattr(self, 'C', None) is not None:
-			raise AttributeError("Can't set C_ if C is already set")
-		if val is None:
-			raise TypeError("Can't set C_ to None")
-		self.C = val
+	def C_(self, val): return _truncated_set('C')
+
+	@property
+	def A_(self):      return _truncated_get('A')
+
+	@A_.setter
+	def A_(self, val): return _truncated_set('A')
 
 class ConnectMessage(SessionMessageBase):
 	TYPE=2
