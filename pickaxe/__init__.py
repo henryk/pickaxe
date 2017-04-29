@@ -7,18 +7,18 @@ def all_subclasses(cls_a):
 		for cls_c in all_subclasses(cls_b):
 			yield cls_c
 
-def kdf(lid, sid, username, password, nonce):
+def kdf(lid, sid, username, password, nonce, kdf_count):
 	salt = bytes(lid) + bytes(sid) + bytes(nonce) + bytes(username)
-	return hashlib.pbkdf2_hmac('sha256', bytes(password), salt, 123456)
+	return hashlib.pbkdf2_hmac('sha256', bytes(password), salt, kdf_count)
 
 class AuthenticationState(object):
-	def __init__(self, lid, sid, username, password, nonce):
+	def __init__(self, lid, sid, username, password, nonce, kdf_count=123456):
 		self.lid = None
 		self.sid = None
 		self.our_seq = 0L
 		self.their_seq = 0L
 
-		self.key = kdf(self.lid, self.sid, username, password, nonce)
+		self.key = kdf(self.lid, self.sid, username, password, nonce, kdf_count)
 
 	def generate_mac(self, message):
 		message.set_counters(self.our_seq + 1, self.their_seq)
@@ -71,15 +71,13 @@ class Message(object):
 				setattr(self, name, val)
 
 	@classmethod
-	def _construct_format(cls, header=True, body=True, omit_fields=(), data_length=None, _obj=None, include_mode=1):
+	def _construct_format(cls, data_length=None, _obj=None, include_mode=1):
 		
 		selected = []
 
-		if header:
-			selected.extend( (f,n) for (f,n,m) in cls.HEADER if n not in omit_fields and (include_mode & m) )
+		selected.extend( (f,n) for (f,n,m) in cls.HEADER if (include_mode & m) )
 
-		if body:
-			selected.extend( (f,n) for (f,n,m) in cls.BODY if n not in omit_fields and (include_mode & m) )
+		selected.extend( (f,n) for (f,n,m) in cls.BODY if (include_mode & m) )
 
 		fmt_list, fields = map(list, zip(*selected))  ## zip(*...) is the inverse of zip(...), kind of
 
@@ -100,16 +98,16 @@ class Message(object):
 			if fmt_list[-1] == '':
 				raise Exception("Internal error: Could not determine variable size bytestring field length")
 
-		return "".join(fmt_list), fields
+		return "!" + "".join(fmt_list), fields
 
 	@classmethod
-	def parse(cls, data, parse_header=True, parse_body=True, omit_fields=()):
+	def parse(cls, data, include_mode=1):
 		if inspect.isabstract(cls):  ## Dispatch to child class based on first byte of data
 			for cls_ in all_subclasses(cls):
 				if not inspect.isabstract(cls_) and cls_.TYPE == ord(data[0]):
-					return cls_.parse(data, parse_header, parse_body, omit_fields)
+					return cls_.parse(data, include_mode=include_mode)
 
-		fmt, fields = cls._construct_format(parse_header, parse_body, omit_fields, data_length = len(data))
+		fmt, fields = cls._construct_format(include_mode=include_mode, data_length = len(data))
 
 		result = cls()
 
@@ -122,8 +120,8 @@ class Message(object):
 
 		return result
 
-	def render(self, render_header=True, render_body=True, omit_fields=()):
-		fmt, fields = self._construct_format(render_header, render_body, omit_fields, _obj=self)
+	def render(self, include_mode=1):
+		fmt, fields = self._construct_format(include_mode=include_mode, _obj=self)
 
 		items = [getattr(self, field) for field in fields]
 
@@ -168,10 +166,10 @@ def untruncate(val, val_):
 class SessionMessageBase(Message):
 	HEADER = Message.HEADER + (
 		('4s', 'SID', 3),
-		('<Q', 'C', 2),    # Long versions of A and C are authenticated
-		('<Q', 'A', 2),
-		('<H', 'C_', 1),   # Short versions and MAC are part of message, but not of MAC calculation
-		('<H', 'A_', 1),
+		('Q', 'C', 2),    # Long versions of A and C are authenticated
+		('Q', 'A', 2),
+		('H', 'C_', 1),   # Short versions and MAC are part of message, but not of MAC calculation
+		('H', 'A_', 1),
 		('8s', 'M', 1)
 	)
 
@@ -212,7 +210,7 @@ class ConnectMessage(SessionMessageBase):
 	BODY = (
 		('16s', 'PID', 3),
 		('B', 'Proto', 3),
-		('<H', 'Port', 3),
+		('H', 'Port', 3),
 		('', 'Target', 3),
 	)
 
@@ -550,7 +548,7 @@ class SimpleTCPConnection(TCPConnectionBase):
 	def parse_and_handle(self):
 		while len(self.inbuf):
 			if len(self.inbuf) >= 4:
-				(length, ) = struct.unpack("<I", self.inbuf[:4])
+				(length, ) = struct.unpack("!I", self.inbuf[:4])
 				if inbuf >= 4 + length:
 					data, self.inbuf = self.inbuf[4:4+length], self.inbuf[4+length:]
 					message = Message.parse(data)

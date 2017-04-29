@@ -33,12 +33,14 @@ Finally, both sides may send data packets for any open CID.
 
 |name |  length |  type     |  description                                             |
 |-----|--------:|-----------|----------------------------------------------------------|
-|L    |       4 |  uint, le |  packet length, only used with stream transports         |
+|L    |       4 |  uint     |  packet length, only used with stream transports         |
 |T    |       1 |  uint     |  packet type, bit 0: sent from server, bit 7 is reserved |
 |SID  |       4 |  opaque   |  session ID                                              |
-|C'   |       2 |  uint, le |  packet sequence number, truncated                       |
-|A'   |       2 |  uint, le |  packet acknowledgement number, truncated                |
+|C'   |       2 |  uint     |  packet sequence number, truncated                       |
+|A'   |       2 |  uint     |  packet acknowledgement number, truncated                |
 |M    |       8 |  opaque   |  packet HMAC                                             |
+
+All integers are transmitted in network byte order (big-endian).
 
 Not all items are transmitted in all packets: For packet based lower layers, the L is implicit and not transmitted. SID,C,A,M are not valid for login/login response packets and not transmitted. Certain lower layers may transmit some of these fields out-of-band, e.g. as HTTP parameters.
 
@@ -70,7 +72,7 @@ Note: This message does not have SID, C, A, or M
 |-----|--------:|-----------|----------------------------------------------------------|
 |PID  |      16 | opaque    | Pending port ID                                          |
 |Proto|       1 | uint      | Protocol identifier: 4=IPv4, 6=IPv6                      |
-|Port |       2 | uint, le  | TCP port number to connect to                            |
+|Port |       2 | uint      | TCP port number to connect to                            |
 |Target|      x | UTF-8     | Protocol specific address or name                        |
 
 ### T=3 Connect response
@@ -87,7 +89,7 @@ Note: This message does not have SID, C, A, or M
 |-----|--------:|-----------|----------------------------------------------------------|
 |PID  |      16 | opaque    | Pending port ID                                          |
 |Config|      1 | uint      | Indicates whether a specific or random port should be used|
-|Port |       2 | uint, le  | TCP port to listen on                                    |
+|Port |       2 | uint      | TCP port to listen on                                    |
 
 ### T=5 Listen response
 
@@ -95,7 +97,7 @@ Note: This message does not have SID, C, A, or M
 |-----|--------:|-----------|----------------------------------------------------------|
 |PID  |      16 | opaque    | Pending port ID, copied from request                     |
 |Status|      1 | uint      |                                                          |
-|Port |       2 | uint, le  | TCP that's listened on                                   |
+|Port |       2 | uint      | TCP that's listened on                                   |
 
 ### T=6 Stop listen
 
