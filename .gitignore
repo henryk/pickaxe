@@ -2,3 +2,4 @@
 /*.sublime-workspace
 docs/Gemfile.lock
 docs/_site/
+/.cache
