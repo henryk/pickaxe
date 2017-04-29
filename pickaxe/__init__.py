@@ -1,11 +1,48 @@
 from abc import ABCMeta, abstractproperty, abstractmethod
-import inspect, struct, select, socket, time, thread, os, sys
+import inspect, struct, select, socket, time, thread, os, sys, hmac, hashlib
 
 def all_subclasses(cls_a):
 	for cls_b in cls_a.__subclasses__():
 		yield cls_b
 		for cls_c in all_subclasses(cls_b):
 			yield cls_c
+
+def kdf(lid, sid, username, password, nonce):
+	salt = bytes(lid) + bytes(sid) + bytes(nonce) + bytes(username)
+	return hashlib.pbkdf2_hmac('sha256', bytes(password), salt, 123456)
+
+class AuthenticationState(object):
+	def __init__(self, lid, sid, username, password, nonce):
+		self.lid = None
+		self.sid = None
+		self.our_seq = 0L
+		self.their_seq = 0L
+
+		self.key = kdf(self.lid, self.sid, username, password, nonce)
+
+	def generate_mac(self, message):
+		message.set_counters(self.our_seq + 1, self.their_seq)
+
+		message.M = self.calculate_mac(message)
+
+		self.our_seq = message.C
+
+	def verify_mac(self, message):
+		message.set_counters(self.their_seq, self.our_seq)
+
+		M_ = self.calculate_mac(message)
+
+		if M_ == message.M:
+			self.their_seq = message.C
+			return True
+		else:
+			return False
+
+	def calculate_mac(self, message):
+		data = message.render(include_mode=2)
+		h = hmac.new(self.key, data, digestmod=hashlib.sha256)
+		return h.digest()[:8]
+
 
 class Message(object):
 	__metaclass__ = ABCMeta
@@ -14,32 +51,37 @@ class Message(object):
 	@classmethod
 	def TYPE(self): return None
 
-	## HEADER and BODY are lists of struct.pack/unpack format and name.
+	## HEADER and BODY are lists of struct.pack/unpack format, name, and mode.
+	##  mode is OR of  1 = "include in message", 2 = "include in authentication"
 	##  '' for format is only allowed in BODY and special case meaning
 	##  "bytestring for the remainder of the message", MUST be last item
 
 	HEADER = (
-		('B', 'T'),
+		('B', 'T', 3),
 	)
 
 	BODY = ()
 
-	def __init__(self, T=None):
+	def __init__(self, T=None, *args, **kwargs):
 		self.meta = {}
 		self.T = T if T is not None else self.TYPE
 
+		for name,val in kwargs.items():
+			if name in [n for (f,n,m) in self.HEADER + self.BODY]:
+				setattr(self, name, val)
+
 	@classmethod
-	def _construct_format(cls, header=True, body=True, omit_fields=(), data_length=None, _obj=None):
+	def _construct_format(cls, header=True, body=True, omit_fields=(), data_length=None, _obj=None, include_mode=1):
 		
 		selected = []
 
 		if header:
-			selected.extend( (f,n) for (f,n) in cls.HEADER if n not in omit_fields )
+			selected.extend( (f,n) for (f,n,m) in cls.HEADER if n not in omit_fields and (include_mode & m) )
 
 		if body:
-			selected.extend( (f,n) for (f,n) in cls.BODY if n not in omit_fields )
+			selected.extend( (f,n) for (f,n,m) in cls.BODY if n not in omit_fields and (include_mode & m) )
 
-		fmt_list, fields = zip(*selected)  ## zip(*...) is the inverse of zip(...), kind of
+		fmt_list, fields = map(list, zip(*selected))  ## zip(*...) is the inverse of zip(...), kind of
 
 		number_of_bytestrings = len([f for f in fmt_list if f == ''])
 		if number_of_bytestrings > 1:
@@ -89,9 +131,9 @@ class Message(object):
 
 class LoginMessageBase(Message):
 	BODY = (
-		('16s', 'LID'),
-		('2s', 'V'),
-		('', 'UID')
+		('16s', 'LID', 3),
+		('2s', 'V', 3),
+		('', 'UID', 3)
 	)
 
 class LoginMessage(LoginMessageBase):
@@ -101,61 +143,85 @@ class LoginResponseMessage(LoginMessageBase):
 	TYPE=1
 
 def _truncated_get(obj, name):
-	val = getattr(self, name, None)
+	val = getattr(obj, name, None)
 	if val is None:
 		return val
 	else:
 		return val & 0xFFFF
 
 def _truncated_set(obj, name, val):
-	if getattr(self, name, None) is not None:
+	if getattr(obj, name, None) is not None:
 		raise AttributeError("Can't set %s_ if %s is already set" % (name, name))
 	if val is None:
 		raise TypeError("Can't set %s_ to None" % name)
 	setattr(obj, name, val)
 
+def untruncate(val, val_):
+	result = (val & ~0xFFFFL) | val_
+	diff = result - val
+	if diff >= 0x8000:
+		result -= 0x10000
+	elif diff <= -0x8000:
+		result += 0x10000
+	return result
+
 class SessionMessageBase(Message):
 	HEADER = Message.HEADER + (
-		('4s', 'SID'),
-		('<H', 'C_'),
-		('<H', 'A_'),
-		('8s', 'M')
+		('4s', 'SID', 3),
+		('<Q', 'C', 2),    # Long versions of A and C are authenticated
+		('<Q', 'A', 2),
+		('<H', 'C_', 1),   # Short versions and MAC are part of message, but not of MAC calculation
+		('<H', 'A_', 1),
+		('8s', 'M', 1)
 	)
 
-	def __init__(self, T=None, SID=None, C=None, A=None, M=None):
-		super(SessionMessage, self).__init__(T)
+	def __init__(self, T=None, SID=None, C=None, A=None, M=None, *args, **kwargs):
+		super(SessionMessageBase, self).__init__(T, *args, **kwargs)
 		self.SID = SID
 		self.C = C
 		self.A = A
 		self.M = M
 
 	@property
-	def C_(self):      return _truncated_get('C')
+	def C_(self):      return _truncated_get(self, 'C')
 
 	@C_.setter
-	def C_(self, val): return _truncated_set('C')
+	def C_(self, val): return _truncated_set(self, 'C')
 
 	@property
-	def A_(self):      return _truncated_get('A')
+	def A_(self):      return _truncated_get(self, 'A')
 
 	@A_.setter
-	def A_(self, val): return _truncated_set('A')
+	def A_(self, val): return _truncated_set(self, 'A')
+
+	def set_counters(self, expected_C, expected_A):
+		C_ = getattr(self, "C_", None)
+		if C_ is None:  # No outgoing C set yet
+			self.C = expected_C
+		elif getattr(self, "C", None) is None:
+			self.C = untruncate(expected_C, C_)
+
+		A_ = getattr(self, "A_", None)
+		if A_ is None:  ## Major error: A/A_ not set yet, MUST NOT happen
+			raise AssertionError("The value of A_ MUST NOT be guessed")
+		elif getattr(self, "A", None) is None:
+			self.A = untruncate(expected_A, A_)
 
 class ConnectMessage(SessionMessageBase):
 	TYPE=2
 	BODY = (
-		('16s', 'PID'),
-		('B', 'Proto'),
-		('<H', 'Port'),
-		('', 'Target'),
+		('16s', 'PID', 3),
+		('B', 'Proto', 3),
+		('<H', 'Port', 3),
+		('', 'Target', 3),
 	)
 
 class ConnectResponseMessage(SessionMessageBase):
 	TYPE=3
 	BODY = (
-		('16s', 'PID'),
-		('4s', 'CID'),
-		('B', 'Status'),
+		('16s', 'PID', 3),
+		('4s', 'CID', 3),
+		('B', 'Status', 3),
 	)
 
 class DisconnectMessage(SessionMessageBase):
@@ -163,8 +229,8 @@ class DisconnectMessage(SessionMessageBase):
 
 class CloseConnMessage(SessionMessageBase):
 	BODY = (
-		('4s', 'CID'),
-		('B', 'Status'),
+		('4s', 'CID', 3),
+		('B', 'Status', 3),
 	)
 
 class CloseConnClientMessage(CloseConnMessage):
@@ -175,8 +241,8 @@ class CloseConnServerMessage(CloseConnMessage):
 
 class DataMessage(SessionMessageBase):
 	BODY = (
-		('4s', 'CID'),
-		('', 'Data'),
+		('4s', 'CID', 3),
+		('', 'Data', 3),
 	)
 
 class DataClientMessage(DataMessage):
