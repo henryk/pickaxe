@@ -303,6 +303,25 @@ class SelectLoop(object):
 		while not self.exit:
 			self.loop_once()
 
+class SelectLoopStateMachine(SelectLoop):
+	__metaclass__ = ABCMeta
+
+	@abstractmethod
+	def state_machine(self):
+		pass
+
+	def __init__(self, *args, **kwargs):
+		super(SelectLoopStateMachine, self).__init__(*args, **kwargs)
+		self.state = self.state_machine()
+
+	def loop_once(self, timeout=None):
+		super(SelectLoopStateMachine, self).loop_once(timeout)
+		if self.state:
+			try:
+				self.state.next()
+			except StopIteration:
+				self.exit = True
+
 class TCPConnectionBase(object):
 	__metaclass__ = ABCMeta
 
@@ -533,6 +552,10 @@ class TCPClientComponentBase(TCPComponentBase):
 	def notify_disconnected(self, connection):
 		super(TCPClientComponentBase, self).notify_disconnected(connection)
 		self.outgoing_socket = None
+
+	@property
+	def is_connected(self):
+		return self.outgoing_socket is not None
 
 
 class SimpleTCPConnection(TCPConnectionBase):
