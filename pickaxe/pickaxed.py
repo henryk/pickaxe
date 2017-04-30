@@ -1,4 +1,4 @@
-from pickaxe import V, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
+from pickaxe import V, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase, ComponentBase
 from pickaxe.messages import *
 import re, time, os
 
@@ -24,21 +24,15 @@ class UserBase(object):
 			return user_data
 		return None
 
-
-class PickaxeD(MessageHandlingLoop):
-	def __init__(self, users):
-		super(PickaxeD, self).__init__()
+class DaemonManager(ComponentBase):
+	def __init__(self, parent, users):
+		super(DaemonManager, self).__init__()
+		self.parent = parent
 		self.users = users
 		self.pending_sessions = {}
 		self.sessions = {}
 
-		http = SimpleHTTPServerComponent(port=4567)
-		tcp = SimpleTCPServerComponent()
-
-		http.start_listen()
-		tcp.start_listen()
-
-		self.components.extend([http, tcp])
+	def process_data(self, r,w,x): pass
 
 	def handle_message(self, message):
 		response = None
@@ -50,7 +44,8 @@ class PickaxeD(MessageHandlingLoop):
 				SID = os.urandom(4)  ## FIXME Check for duplicate
 				nonce = os.urandom(16)
 				now = time.time()
-				self.pending_sessions[SID] = (message.LID, nonce, now, now+60, user) ## FIXME Configurable timeout
+				t = self.add_timer(60, lambda : self.pending_sessions.pop(SID, None)) ## FIXME Configurable timeout
+				self.pending_sessions[SID] = (message.LID, nonce, t, user) 
 
 				response = LoginResponseMessage(LID=message.LID, V=V, SID=SID, nonce=nonce)
 				## FIXME Prevent user enumeration
@@ -58,7 +53,29 @@ class PickaxeD(MessageHandlingLoop):
 			print "Unhandled message", message
 
 		if response is not None:
-			message.meta["connection"].send_message(response)  ## FIXME Proper response routing
+			self.parent.dispatch_message(response, message)
+	
+class PickaxeD(MessageHandlingLoop):
+	def __init__(self, users):
+		super(PickaxeD, self).__init__()
+
+		http = SimpleHTTPServerComponent(port=4567)
+		tcp = SimpleTCPServerComponent()
+		self.manager = DaemonManager(self, users)
+
+		http.start_listen()
+		tcp.start_listen()
+
+		self.components.extend([http, tcp, self.manager])
+
+	def handle_message(self, message):
+		if message.T & 1 == 0:
+			self.manager.handle_message(message)
+		else:
+			print "Invalid message type 0x%02X received" % message.T
+
+	def dispatch_message(self, message, query=None):
+		query.meta["connection"].send_message(message)  ## FIXME Proper response routing
 
 
 class HTTPRequest(object):
