@@ -1,4 +1,4 @@
-from pickaxe import V, SelectLoopStateMachine, MessageHandlingLoop, SimpleTCPClientComponent
+from pickaxe import V, SelectLoopStateMachine, MessageHandlingLoop, SimpleTCPClientComponent, AuthenticationState
 from pickaxe.messages import *
 import uuid
 
@@ -10,6 +10,8 @@ class PickaxeC(MessageHandlingLoop, SelectLoopStateMachine):
 		self.port = port
 		self.username = username
 		self.password = password
+		self.auth = None
+		self.lid = None
 
 		self.components.append( SimpleTCPClientComponent(host=self.host, port=self.port) )
 
@@ -19,8 +21,8 @@ class PickaxeC(MessageHandlingLoop, SelectLoopStateMachine):
 			while not any(c.is_connected for c in self.components):
 				yield
 
-			lid = uuid.uuid4()
-			login = LoginMessage(LID=lid.bytes, V=V, UID=self.username)
+			self.lid = uuid.uuid4()
+			login = LoginMessage(LID=self.lid.bytes, V=V, UID=self.username)
 			for c in self.components:
 				if c.is_connected:
 					c.connections[0].send_message(login)
@@ -33,7 +35,18 @@ class PickaxeC(MessageHandlingLoop, SelectLoopStateMachine):
 			print "Connection lost"
 
 	def handle_message(self, message):
-		print message
+		if isinstance(message, LoginResponseMessage):
+			assert message.LID == self.lid.bytes  ## FIXME Proper check
+			self.auth = AuthenticationState(self.lid, message.SID, self.username, self.password, message.nonce)
+			u = uuid.uuid4()
+			print "Sending Ping", u
+			ping = EchoClientMessage(Data=u.bytes)
+			ping.SID = message.SID
+			ping.A = 0
+			self.auth.generate_mac(ping)
+			message.meta["connection"].send_message(ping)
+		else:
+			print "Unhandled message", message
 
 
 if __name__ == '__main__':

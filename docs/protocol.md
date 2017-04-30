@@ -58,12 +58,13 @@ Note: This message does not have SID, C, A, or M
 
 ### T=1 Login response
 
-Note: This message does not have SID, C, A, or M
+Note: This message does not have SID (in header), C, A, or M
 
 |name |  length |  type     |  description                                             |
 |-----|--------:|-----------|----------------------------------------------------------|
 |LID  |      16 | opaque    |  Login ID, copied from the login message                 |
 |V    |       2 | two uint  |  used protocol version as two integers                   |
+|SID  |       4 | opaque    |  session ID                                              |
 |nonce|      16 | opaque    |  server's login nonce                                    |
 
 ### T=2 Connect
@@ -132,9 +133,7 @@ Note: This message does not have SID, C, A, or M
 
 |name |  length |  type     |  description                                             |
 |-----|--------:|-----------|----------------------------------------------------------|
-|Type |       1 | uint      |                                                          |
-|EID  |     16? | opaque    | Echo ID, only for echo                                   |
-|Data |      x? | opaque    | Echo data, only for echo                                 |
+|Data |       x | opaque    | Echo data, only for echo                                 |
 
 ### T=126/127 Disconnect
 

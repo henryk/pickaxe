@@ -1,9 +1,37 @@
-from pickaxe import Message, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
-import re
+from pickaxe import V, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
+from pickaxe.messages import *
+import re, time, os
+
+class UserBase(object):
+	def __init__(self):
+		self.users = {}
+		self.lockout_times = {}
+
+	def add_users(self, users):
+		for u,p in users:
+			self.users[u.lower()] = (p, )
+
+	def throttled_get_user(self, user):
+		user = user.lower()
+		now = time.time()
+		lt = self.lockout_times.get(user, None)
+		if lt is not None:
+			if now >= lt[0] and now <= lt[1]:
+				return None
+		user_data = self.users.get(user, None)
+		if user_data:
+			self.lockout_times[user] = (now, now + 3)  ## FIXME Configurable
+			return user_data
+		return None
+
 
 class PickaxeD(MessageHandlingLoop):
-	def __init__(self):
-		super(MessageHandlingLoop, self).__init__()
+	def __init__(self, users):
+		super(PickaxeD, self).__init__()
+		self.users = users
+		self.pending_sessions = {}
+		self.sessions = {}
+
 		http = SimpleHTTPServerComponent(port=4567)
 		tcp = SimpleTCPServerComponent()
 
@@ -13,7 +41,24 @@ class PickaxeD(MessageHandlingLoop):
 		self.components.extend([http, tcp])
 
 	def handle_message(self, message):
-		print message
+		response = None
+		if isinstance(message, LoginMessage):
+			## FIXME Check V
+			## FIXME Simply resend for duplicate LID
+			user = self.users.throttled_get_user(message.UID)
+			if user:
+				SID = os.urandom(4)  ## FIXME Check for duplicate
+				nonce = os.urandom(16)
+				now = time.time()
+				self.pending_sessions[SID] = (message.LID, nonce, now, now+60, user) ## FIXME Configurable timeout
+
+				response = LoginResponseMessage(LID=message.LID, V=V, SID=SID, nonce=nonce)
+				## FIXME Prevent user enumeration
+		else:
+			print "Unhandled message", message
+
+		if response is not None:
+			message.meta["connection"].send_message(response)  ## FIXME Proper response routing
 
 
 class HTTPRequest(object):
@@ -91,5 +136,7 @@ class SimpleHTTPServerComponent(TCPServerComponentBase):
 
 
 if __name__ == '__main__':
-	daemon = PickaxeD()
+	users = UserBase()
+	users.add_users({'test': 'test@123'}.items())
+	daemon = PickaxeD(users)
 	daemon.mainloop()

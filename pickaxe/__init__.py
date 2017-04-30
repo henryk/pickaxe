@@ -119,8 +119,8 @@ class MessageHandlingLoop(SelectLoop):
 	def loop_once(self, *args, **kwargs):
 		super(MessageHandlingLoop, self).loop_once(*args, **kwargs)
 		for c in self.components:
-			for m in c.incoming_messages:
-				self.handle_message(m)
+			while len(c.incoming_messages) > 0:
+				self.handle_message(c.incoming_messages.pop(0))
 
 
 class TCPConnectionBase(object):

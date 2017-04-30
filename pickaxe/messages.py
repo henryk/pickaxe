@@ -52,7 +52,7 @@ class Message(object):
 
 		if fmt_list[-1] == '':
 			if data_length:
-				fmt_list[-1] = "%is" % (data_length - struct.calcsize("".join(fmt_list)))
+				fmt_list[-1] = "%is" % (data_length - struct.calcsize("!" + "".join(fmt_list)))
 			elif _obj:
 				payload = getattr(_obj, fields[-1], None)
 				if payload is not None:
@@ -90,18 +90,22 @@ class Message(object):
 
 		return struct.pack(fmt, *items)
 
-class LoginMessageBase(Message):
+class LoginMessage(Message):
+	TYPE=0
 	BODY = (
 		('16s', 'LID', 3),
 		('2s', 'V', 3),
 		('', 'UID', 3)
 	)
 
-class LoginMessage(LoginMessageBase):
-	TYPE=0
-
-class LoginResponseMessage(LoginMessageBase):
+class LoginResponseMessage(Message):
 	TYPE=1
+	BODY = (
+		('16s', 'LID', 3),
+		('2s', 'V', 3),
+		('4s', 'SID', 3),
+		('', 'nonce', 3)
+	)
 
 def _truncated_get(obj, name):
 	val = getattr(obj, name, None)
@@ -147,13 +151,13 @@ class SessionMessageBase(Message):
 	def C_(self):      return _truncated_get(self, 'C')
 
 	@C_.setter
-	def C_(self, val): return _truncated_set(self, 'C')
+	def C_(self, val): return _truncated_set(self, 'C', val)
 
 	@property
 	def A_(self):      return _truncated_get(self, 'A')
 
 	@A_.setter
-	def A_(self, val): return _truncated_set(self, 'A')
+	def A_(self, val): return _truncated_set(self, 'A', val)
 
 	def set_counters(self, expected_C, expected_A):
 		C_ = getattr(self, "C_", None)
@@ -211,6 +215,17 @@ class DataClientMessage(DataMessage):
 
 class DataServerMessage(DataMessage):
 	TYPE=11
+
+class EchoMessage(SessionMessageBase):
+	BODY = (
+		('', 'Data', 3),
+	)
+
+class EchoClientMessage(EchoMessage):
+	TYPE=12
+
+class EchoServerMessage(EchoMessage):
+	TYPE=13
 
 class DisconnectClientMessage(DisconnectMessage):
 	TYPE=126
