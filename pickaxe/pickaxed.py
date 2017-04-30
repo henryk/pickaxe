@@ -1,8 +1,20 @@
-from pickaxe import Message, SelectLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
+from pickaxe import Message, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase
 import re
 
-class PickaxeD(SelectLoop):
-	pass
+class PickaxeD(MessageHandlingLoop):
+	def __init__(self):
+		super(MessageHandlingLoop, self).__init__()
+		http = SimpleHTTPServerComponent(port=4567)
+		tcp = SimpleTCPServerComponent()
+
+		http.start_listen()
+		tcp.start_listen()
+
+		self.components.extend([http, tcp])
+
+	def handle_message(self, message):
+		print message
+
 
 class HTTPRequest(object):
 	HTTP_REQUEST_RE = re.compile(r'^(?P<verb>[a-z]+?)[ \t]+(?P<path>.+?)(?:[ \t]+HTTP[ \t]*\/[ \t]*(?P<version>\d+\.\d+))?[ \t]*(?P<CRLF>[\r])?[\n]' +
@@ -80,12 +92,4 @@ class SimpleHTTPServerComponent(TCPServerComponentBase):
 
 if __name__ == '__main__':
 	daemon = PickaxeD()
-	http = SimpleHTTPServerComponent(port=4567)
-	tcp = SimpleTCPServerComponent()
-
-	http.start_listen()
-	tcp.start_listen()
-
-	daemon.components.extend([http, tcp])
-
 	daemon.mainloop()
