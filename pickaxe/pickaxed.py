@@ -1,4 +1,4 @@
-from pickaxe import V, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase, ComponentBase
+from pickaxe import V, MessageHandlingLoop, SimpleTCPServerComponent, TCPServerComponentBase, TCPConnectionBase, ComponentBase, AuthenticationState
 from pickaxe.messages import *
 import re, time, os
 
@@ -24,36 +24,81 @@ class UserBase(object):
 			return user_data
 		return None
 
+class Session(AuthenticationState):
+	def __init__(self, *args, **kwargs):
+		self.pending = True
+		self.parent = kwargs.pop("parent", None)
+
+		super(Session, self).__init__(*args, **kwargs)
+
+		if self.parent:
+			self.timer = self.parent.add_timer(60, self.timeout) ## FIXME Configurable timeout
+
+	def timeout(self):
+		print "Login %s timed out" % self.SID
+		self.parent.remove_session(self.SID)
+		self.timer = None
+
+	def verify_mac(self, *args, **kwargs):
+		if self.timer:
+			self.parent.del_timer(self.timer)
+			self.timer = None
+		result = super(Session, self).verify_mac(*args, **kwargs)
+
+		if self.pending:
+			if not result:
+				print "Login %s invalid" % self.SID
+				self.parent.remove_session(self.SID)
+			self.pending = False
+			print "Login by %s" % self.username
+
+		return result
+
+
 class DaemonManager(ComponentBase):
 	def __init__(self, parent, users):
 		super(DaemonManager, self).__init__()
 		self.parent = parent
 		self.users = users
-		self.pending_sessions = {}
 		self.sessions = {}
 
 	def process_data(self, r,w,x): pass
 
 	def handle_message(self, message):
-		response = None
 		if isinstance(message, LoginMessage):
-			## FIXME Check V
-			## FIXME Simply resend for duplicate LID
-			user = self.users.throttled_get_user(message.UID)
-			if user:
-				SID = os.urandom(4)  ## FIXME Check for duplicate
-				nonce = os.urandom(16)
-				now = time.time()
-				t = self.add_timer(60, lambda : self.pending_sessions.pop(SID, None)) ## FIXME Configurable timeout
-				self.pending_sessions[SID] = (message.LID, nonce, t, user) 
-
-				response = LoginResponseMessage(LID=message.LID, V=V, SID=SID, nonce=nonce)
-				## FIXME Prevent user enumeration
+			self.process_login(message)
 		else:
-			print "Unhandled message", message
+			if self.authenticate_message(message):
+				self.process_message(message)
+			else:
+				## Messages out of session and invalid messages are ignored
+				print "Unauthenticated message", message
 
-		if response is not None:
-			self.parent.dispatch_message(response, message)
+	def process_login(self, message):
+		## FIXME Check V
+		## FIXME Simply resend for duplicate LID
+		user = self.users.throttled_get_user(message.UID)
+		if user:
+			SID = os.urandom(4)  ## FIXME Check for duplicate
+			nonce = os.urandom(16)
+			now = time.time()
+			self.sessions[SID] = Session(message.LID, SID, message.UID, user[0], nonce, parent=self)
+
+			self.parent.dispatch_message(  LoginResponseMessage(LID=message.LID, V=V, SID=SID, nonce=nonce), message  )
+		## FIXME Prevent user enumeration
+
+	def authenticate_message(self, message):
+		session = self.sessions.get(message.SID, None)
+		if session is not None:
+			return session.verify_mac(message)
+		return False
+
+	def process_message(self, message):
+		pass
+
+	def remove_session(self, SID):
+		self.sessions.pop(SID, None)
+
 	
 class PickaxeD(MessageHandlingLoop):
 	def __init__(self, users):

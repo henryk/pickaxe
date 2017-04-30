@@ -17,7 +17,11 @@ class AuthenticationState(object):
 		self.our_seq = 0L
 		self.their_seq = 0L
 
-		self.key = kdf(self.lid, self.sid, username, password, nonce, kdf_count)
+		self._key = None
+		self.username = username
+		self.password = password
+		self.nonce = nonce
+		self.kdf_count = kdf_count
 
 	def generate_mac(self, message):
 		message.set_counters(self.our_seq + 1, self.their_seq)
@@ -42,6 +46,12 @@ class AuthenticationState(object):
 		h = hmac.new(self.key, data, digestmod=hashlib.sha256)
 		return h.digest()[:8]
 
+	@property
+	def key(self):
+		if self._key is None:
+			self._key = kdf(self.lid, self.sid, self.username, self.password, self.nonce, self.kdf_count)
+
+		return self._key
 
 class SelectLoop(object):
 	def __init__(self):
