@@ -88,7 +88,7 @@ class Message(object):
 
 		items = [getattr(self, field) for field in fields]
 
-		return struct.pack(fmt, *items)
+ 		return struct.pack(fmt, *items)
 
 class LoginMessage(Message):
 	TYPE=0
@@ -159,7 +159,7 @@ class SessionMessageBase(Message):
 	@A_.setter
 	def A_(self, val): return _truncated_set(self, 'A', val)
 
-	def set_counters(self, expected_C, expected_A):
+	def guess_sequence(self, expected_C, expected_A):
 		C_ = getattr(self, "C_", None)
 		if C_ is None:  # No outgoing C set yet
 			self.C = expected_C

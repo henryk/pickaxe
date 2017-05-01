@@ -29,20 +29,20 @@ def authentication_state():
 	return AuthenticationState(16*b'\x00', 4*b'\x00', username="test", password="test@123", nonce=16*b'\x00', kdf_count=23)
 
 def test_authentication(authentication_state, message_data_short):
-	authentication_state.generate_mac(message_data_short)
+	authentication_state.set_counter_and_generate_mac(message_data_short)
 	
-	assert authentication_state.verify_mac(message_data_short)
+	assert authentication_state.guess_counters_and_verify_mac(message_data_short)
 
 	message_data_short.M = 8*b'\x00'
 
-	assert authentication_state.verify_mac(message_data_short) == False
+	assert authentication_state.guess_counters_and_verify_mac(message_data_short) == False
 
 def test_authenticated_ping(authentication_state):
 	message = EchoClientMessage(SID=b'1234', A=0, Data=14*b'\x00'+b'az')
-	authentication_state.generate_mac(message)
+	authentication_state.set_counter_and_generate_mac(message)
 
 	data = message.render()
 
 	message_ = Message.parse(data)
 
-	authentication_state.verify_mac(message_)
+	authentication_state.guess_counters_and_verify_mac(message_)

@@ -12,8 +12,8 @@ def kdf(lid, sid, username, password, nonce, kdf_count):
 
 class AuthenticationState(object):
 	def __init__(self, lid, sid, username, password, nonce, kdf_count=123456):
-		self.lid = None
-		self.sid = None
+		self.lid = lid
+		self.sid = sid
 		self.our_seq = 0L
 		self.their_seq = 0L
 
@@ -23,15 +23,15 @@ class AuthenticationState(object):
 		self.nonce = nonce
 		self.kdf_count = kdf_count
 
-	def generate_mac(self, message):
-		message.set_counters(self.our_seq + 1, self.their_seq)
+	def set_counter_and_generate_mac(self, message):
+		message.guess_sequence(self.our_seq + 1, self.their_seq)
 
 		message.M = self.calculate_mac(message)
 
 		self.our_seq = message.C
 
-	def verify_mac(self, message):
-		message.set_counters(self.their_seq, self.our_seq)
+	def guess_counters_and_verify_mac(self, message):
+		message.guess_sequence(self.their_seq, self.our_seq)
 
 		M_ = self.calculate_mac(message)
 

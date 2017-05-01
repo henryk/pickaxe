@@ -35,20 +35,20 @@ class Session(AuthenticationState):
 			self.timer = self.parent.add_timer(60, self.timeout) ## FIXME Configurable timeout
 
 	def timeout(self):
-		print "Login %s timed out" % self.SID
-		self.parent.remove_session(self.SID)
+		print "Login %s timed out" % self.sid
+		self.parent.remove_session(self.sid)
 		self.timer = None
 
-	def verify_mac(self, *args, **kwargs):
+	def guess_counters_and_verify_mac(self, *args, **kwargs):
 		if self.timer:
 			self.parent.del_timer(self.timer)
 			self.timer = None
-		result = super(Session, self).verify_mac(*args, **kwargs)
+		result = super(Session, self).guess_counters_and_verify_mac(*args, **kwargs)
 
 		if self.pending:
 			if not result:
-				print "Login %s invalid" % self.SID
-				self.parent.remove_session(self.SID)
+				print "Login %s invalid" % self.sid
+				self.parent.remove_session(self.sid)
 			self.pending = False
 			print "Login by %s" % self.username
 
@@ -68,36 +68,69 @@ class DaemonManager(ComponentBase):
 		if isinstance(message, LoginMessage):
 			self.process_login(message)
 		else:
-			if self.authenticate_message(message):
-				self.process_message(message)
-			else:
+			session = self.authenticate_message(message)
+			## FIXME Handle out-of-order messages
+
+			if not session:
 				## Messages out of session and invalid messages are ignored
 				print "Unauthenticated message", message
+				return
+
+			if self.send_duplicate( (session.sid, message.C), message):
+				return ## Short circuit duplicate answer
+
+			response = self.process_message(session, message)
+
+			self.dispatch_message(response,
+				query = message,
+				duplication_key = (session.sid, message.C), session=session)
 
 	def process_login(self, message):
-		## FIXME Check V
-		## FIXME Simply resend for duplicate LID
-		user = self.users.throttled_get_user(message.UID)
-		if user:
-			SID = os.urandom(4)  ## FIXME Check for duplicate
-			nonce = os.urandom(16)
-			now = time.time()
-			self.sessions[SID] = Session(message.LID, SID, message.UID, user[0], nonce, parent=self)
+		## FIXME Check V  (Reminder: Prevent enumeration)
+		if self.send_duplicate(message.LID, message):
+			return ## Short circuit receiving the same LoginMessage over multiple channels
 
-			self.parent.dispatch_message(  LoginResponseMessage(LID=message.LID, V=V, SID=SID, nonce=nonce), message  )
-		## FIXME Prevent user enumeration
+		user = self.users.throttled_get_user(message.UID)
+		sid = os.urandom(4)
+		nonce = os.urandom(16)
+
+		if user:
+			while sid in self.sessions.keys():
+				sid = os.urandom(4)   # This is probably non-optimal :)
+
+			self.sessions[sid] = Session(message.LID, sid, message.UID, user[0], nonce, parent=self)
+
+		self.dispatch_message( 
+			LoginResponseMessage(LID=message.LID, V=V, SID=sid, nonce=nonce),
+			query = message,
+			duplication_key = message.LID )
 
 	def authenticate_message(self, message):
 		session = self.sessions.get(message.SID, None)
 		if session is not None:
-			return session.verify_mac(message)
+			if session.guess_counters_and_verify_mac(message):
+				return session
 		return False
 
-	def process_message(self, message):
-		pass
+	def process_message(self, session, message):
+		if isinstance(message, EchoClientMessage):
+			if len(message.Data) > 0:
+				return EchoServerMessage(Data=message.Data)
 
-	def remove_session(self, SID):
-		self.sessions.pop(SID, None)
+	def remove_session(self, sid):
+		self.sessions.pop(sid, None)
+
+	def send_duplicate(self, duplication_key, query):
+		pass ## FIXME Implement duplicate response sending
+
+	def dispatch_message(self, message, query=None, duplication_key=None, session=None):
+		if session:
+			message.SID = session.sid
+			message.A = session.their_seq
+			session.set_counter_and_generate_mac(message)
+
+		if query: ## FIXME Better routing/abstraction
+			query.meta["connection"].send_message(message)
 
 	
 class PickaxeD(MessageHandlingLoop):
@@ -118,10 +151,6 @@ class PickaxeD(MessageHandlingLoop):
 			self.manager.handle_message(message)
 		else:
 			print "Invalid message type 0x%02X received" % message.T
-
-	def dispatch_message(self, message, query=None):
-		query.meta["connection"].send_message(message)  ## FIXME Proper response routing
-
 
 class HTTPRequest(object):
 	HTTP_REQUEST_RE = re.compile(r'^(?P<verb>[a-z]+?)[ \t]+(?P<path>.+?)(?:[ \t]+HTTP[ \t]*\/[ \t]*(?P<version>\d+\.\d+))?[ \t]*(?P<CRLF>[\r])?[\n]' +
